@@ -17,166 +17,259 @@
 
 from math import *
 import cairo
-
+import sys
 import argparse
+from enum import Enum
 
-def drawTriangle(ctx, a, b, h, k, tune):
-    trans = k % 2 == 0
 
-    ctx.rel_move_to(h, a * (k//2+1))
+class FaceType(Enum):
+    COMMON = "dur",
+    HIDDEN = "moll"
 
-    if tune == "moll":
-        h = -h
+
+# border = 3/4cm
+PAPER_BORDER = .75 * 72.0 / 2.54
+
+PAPER_SIZES = {
+    "A4": {"width": 595, "height": 842},
+    "LETTER": {"width": 612, "height": 792},
+    "LEGAL": {"width": 612, "height": 1008},
+    "TABLOID": {"width": 792, "height": 1224}
+}
+
+
+def height_of_triangle(side):
+    return sqrt(3)/2 * side
+
+
+def draw_triangle(
+    context,
+    side,
+    half_side,
+    height,
+    index,
+    face_type
+):
+    trans = index % 2 == 0
+
+    context.rel_move_to(height, side * (index//2+1))
+
+    if face_type == FaceType.HIDDEN:
+        height = -height
 
     if trans:
-        ctx.rel_line_to(-h, -b)
-        ctx.rel_line_to(h, -b)
-        ctx.rel_line_to(0, a)
+        context.rel_line_to(-height, -half_side)
+        context.rel_line_to(height, -half_side)
+        context.rel_line_to(0, side)
     else:
-        ctx.rel_line_to(-h, b)
-        ctx.rel_line_to(0, -a)
-        ctx.rel_line_to(h, b)
+        context.rel_line_to(-height, half_side)
+        context.rel_line_to(0, -side)
+        context.rel_line_to(height, half_side)
 
-    ctx.close_path()
+    context.close_path()
 
-def drawOutline(ctx, a, b, h):
-    curpt = ctx.get_current_point()
 
-    for k in range(0, 19):
-        for tune in ["dur", "moll"]:
-            drawTriangle( ctx, a, b, h, k, tune )
+def draw_outline(
+    context,
+    triangle_side,
+    triangle_half_side,
+    triangle_height
+):
+    current_point = context.get_current_point()
 
-            ctx.set_source_rgb (0.0, 0.0, 0.0)
-            ctx.set_line_width (1)
-            ctx.stroke ()
+    for triangle_index in range(0, 19):
+        for face_type in [FaceType.COMMON, FaceType.HIDDEN]:
+            draw_triangle(
+                context,
+                triangle_side,
+                triangle_half_side,
+                triangle_height,
+                triangle_index,
+                face_type
+            )
 
-            ctx.move_to(*curpt)
+            context.set_source_rgb(0.0, 0.0, 0.0)
+            context.set_line_width(1)
+            context.stroke()
 
-def transformToTextureSpace(ctx, a, b, h, tune, ori, trans, img_width, img_height, m):
-    translation = { "dur" : {   
-                                "stone"   : [ (0, 0), (-h, b) ], 
-                                "scissor" : [ (0, -a), (-h, -b) ], 
-                                "paper"   : [ (-h, -b), (0, 0) ] 
-                            },
-                    "moll" : {  
-                                "stone"   : [ (h, -b), (h, -b) ],
-                                "scissor" : [ (h, -b), (h, -b) ]
-                             }
-                  }
+            context.move_to(*current_point)
 
-    rotation    = { "dur" :  {  
-                                "stone"   : [ 0, 2 ],
-                                "scissor" : [ -4, 6 ],
-                                "paper"   : [ -4, 2 ],
-                             },
-                    "moll" : {  
-                                "stone"   : [ 0, -2 ],
-                                "scissor" : [ -4, -6 ]
-                             }
-                  }
 
-    dx, dy = translation[tune][ori][trans]
-    rot    = 2*pi/12 * ( rotation[tune][ori][trans] + 2*m )
+def transform_to_texture_space(
+    context,
+    triangle_side,
+    triangle_half_side,
+    triangle_height,
+    face_type,
+    ori,
+    trans,
+    image_width,
+    image_height,
+    m
+):
+    translation = {
+        FaceType.COMMON: {
+            "stone": [(0, 0), (-triangle_height, triangle_half_side)],
+            "scissor": [(0, -triangle_side), (-triangle_height, -triangle_half_side)],
+            "paper": [(-triangle_height, -triangle_half_side), (0, 0)]
+        },
+        FaceType.HIDDEN: {
+            "stone": [(triangle_height, -triangle_half_side), (triangle_height, -triangle_half_side)],
+            "scissor": [(triangle_height, -triangle_half_side), (triangle_height, -triangle_half_side)]
+        }
+    }
 
-    ref_size = min(img_width, img_height)
-    scale = 2*a/ref_size
+    rotation = {
+        FaceType.COMMON:  {
+            "stone": [0, 2],
+            "scissor": [-4, 6],
+            "paper": [-4, 2],
+        },
+        FaceType.HIDDEN: {
+            "stone": [0, -2],
+            "scissor": [-4, -6]
+        }
+    }
 
-    x,y = ctx.get_current_point()
+    dx, dy = translation[face_type][ori][trans]
+    rot = 2*pi/12 * (rotation[face_type][ori][trans] + 2*m)
 
-    ctx.translate(x+dx, y+dy)
-    ctx.scale(scale, scale)
-    ctx.rotate(rot)
+    ref_size = min(image_width, image_height)
+    scale = 2*triangle_side/ref_size
 
-    ctx.translate(-.5*img_width, -.5*img_height)
+    x, y = context.get_current_point()
 
-def drawPicture(ctx, a, b, h, face, ori, img):
-    curpt = ctx.get_current_point()
+    context.translate(x+dx, y+dy)
+    context.scale(scale, scale)
+    context.rotate(rot)
 
-    if face < 3:
-        tune = "dur"
-    else:
-        tune = "moll"
+    context.translate(-.5*image_width, -.5*image_height)
+
+
+def draw_picture(
+    context,
+    triangle_side,
+    triangle_half_side,
+    triangle_height,
+    face,
+    ori,
+    image
+):
+    current_point = context.get_current_point()
+    face_type = FaceType.COMMON if face < 3 else FaceType.HIDDEN
 
     alpha = 0.4
-    img_width, img_height = img.get_width(), img.get_height()
-    pat = cairo.SolidPattern(0.0, 0.0, 0.0, alpha) 
+    image_width, image_height = image.get_width(), image.get_height()
+    pat = cairo.SolidPattern(0.0, 0.0, 0.0, alpha)
 
-    for m in range(0,6):
-        if tune == "dur":
-            k = 1 + 3*m + face
-        elif tune == "moll":
-            k = m%2 + 2*(face-3+3*(m//2))
+    for triangle_in_image_index in range(0, 6):
+        if face_type == FaceType.COMMON:
+            k = 1 + 3*triangle_in_image_index + face
+        elif face_type == FaceType.HIDDEN:
+            k = triangle_in_image_index % 2 + 2 * \
+                (face-3+3*(triangle_in_image_index//2))
 
-        trans = k%2
+        trans = k % 2
 
-        drawTriangle(ctx, a, b, h, k, tune)
+        draw_triangle(
+            context,
+            triangle_side,
+            triangle_half_side,
+            triangle_height,
+            k,
+            face_type
+        )
 
-        ctx.save()
-        
-        transformToTextureSpace(ctx, a, b, h, tune, ori, trans, img_width, img_height, m)
+        context.save()
 
-        ctx.clip()
-        ctx.set_source_surface(img)
+        transform_to_texture_space(
+            context,
+            triangle_side,
+            triangle_half_side,
+            triangle_height,
+            face_type,
+            ori,
+            trans,
+            image_width,
+            image_height,
+            triangle_in_image_index
+        )
 
-        if tune == "dur" and ori == "paper":
-            ctx.mask(pat)
+        context.clip()
+        context.set_source_surface(image)
+
+        if face_type == FaceType.COMMON and ori == "paper":
+            context.mask(pat)
         else:
-            ctx.paint()
+            context.paint()
 
-        ctx.restore()
+        context.restore()
 
-        ctx.move_to(*curpt)
+        context.move_to(*current_point)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Make a hexaflexagon with a picture printed on each of the six faces.')
+    parser = argparse.ArgumentParser(
+        description='Make a hexaflexagon with a picture printed on each of the six faces.')
     parser.add_argument('pics', type=str, nargs='+',
                         help='Filenames to pictures (only png).')
     parser.add_argument('--output', type=str,
                         help='Output filename (pdf).', default="out.pdf")
     parser.add_argument('--paper', type=str,
-                        help='Paper size', default="A4");
+                        help='Paper size', default="A4")
 
     args = parser.parse_args()
 
-    # The units for pdf size is a point=1/72inch
-    if (args.paper.upper() == 'A4'):
-        WIDTH, HEIGHT = 595, 842
-    elif (args.paper.upper() == 'LETTER'):
-        WIDTH, HEIGHT = 612, 792
-    elif (args.paper.upper() == 'LEGAL'):
-        WIDTH, HEIGHT = 612, 1008
-    elif (args.paper.upper() == 'TABLOID'):
-        WIDTH, HEIGHT = 792, 1224
-    else:
+    paper_size = PAPER_SIZES.get(args.paper.upper(), None)
+    if paper_size == None:
         print("Paper type not understood: '"+args.paper+"'")
         sys.exit(1)
 
-    surface = cairo.PDFSurface(args.output, WIDTH, HEIGHT)
-    ctx = cairo.Context(surface)
+    width = paper_size["width"]
+    height = paper_size["height"]
 
-    border = .75 * 72.0 / 2.54   # border = 3/4cm
-    a = (HEIGHT - 2*border)/10   # eq. triangle side, we need 10 down the spine
-    b = a/2                      # half-side of eq. triangles
-    h = sqrt(3)/2 * a            # height of eq.triangles
-    n = int(WIDTH / (h*2));      # this is how many will fit in the paper's width
+    surface = cairo.PDFSurface(args.output, width, height)
+    context = cairo.Context(surface)
 
-    for i in range(n):
-        ctx.move_to( border + i*(2*h), border )
+    # we need 10 down the spine
+    triangle_side = (height - 2*PAPER_BORDER)/10
+    triangle_half_side = triangle_side/2
+    triangle_height = height_of_triangle(triangle_side)
+    horizontal_triangle_count = int(width / (triangle_height*2))
 
-        commonfaces         = list(zip(range(0,3), ["scissor"] * 3))
-        hiddenfaces         = list(zip(range(3,6), ["scissor", "scissor", "stone"]))
-        transparentfaces    = list(zip(range(0,3), ["paper"]   * 3))
+    for i in range(horizontal_triangle_count):
+        context.move_to(PAPER_BORDER + i * (2*triangle_height), PAPER_BORDER)
 
-        for pic_fn, (face, ori) in zip(args.pics, commonfaces + hiddenfaces + transparentfaces):
-            img = cairo.ImageSurface.create_from_png(pic_fn)
+        common_faces = list(zip(range(0, 3), ["scissor"] * 3))
+        hidden_faces = list(zip(range(3, 6), ["scissor", "scissor", "stone"]))
+        transparent_faces = list(zip(range(0, 3), ["paper"] * 3))
 
-            drawPicture(ctx, a, b, h, face, ori, img)
+        print(common_faces)
+        print(hidden_faces)
+        print(transparent_faces)
+        print(common_faces + hidden_faces + transparent_faces)
 
-        drawOutline(ctx, a, b, h)
+        for path_to_image, (face, ori) in zip(args.pics, common_faces + hidden_faces + transparent_faces):
+            image = cairo.ImageSurface.create_from_png(path_to_image)
+            draw_picture(
+                context,
+                triangle_side,
+                triangle_half_side,
+                triangle_height,
+                face,
+                ori,
+                image
+            )
+
+        draw_outline(
+            context,
+            triangle_side,
+            triangle_half_side,
+            triangle_height
+        )
 
     surface.show_page()
 
+
 if __name__ == "__main__":
     main()
-
